@@ -5,8 +5,8 @@
   "description": "Prioritizes Canvas assignments based on weight, due date, and course grade",
   "permissions": [
     "storage",
-    "activeTab",
-    "tabs"
+    "tabs",
+    "activeTab"
   ],
   "host_permissions": [
     "*://*.instructure.com/*"
@@ -23,5 +23,12 @@
   ],
   "icons": {
     
-  }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "web_accessible_resources": [{
+    "resources": ["settings.html", "settings.js"],
+    "matches": ["<all_urls>"]
+  }]
 } 

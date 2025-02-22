@@ -272,15 +272,19 @@ function sendAssignmentsToExtension(assignments) {
 
 // Add priority calculation function
 function calculateAssignmentPriority(assignment) {
-  const now = new Date();
-  const dueDate = new Date(assignment.dueDate);
-  const daysUntilDue = Math.ceil((dueDate - now) / (1000 * 60 * 60 * 24));
+  const priorityCalculator = new PriorityCalculator();
   
-  // Priority factors
-  const timeUrgency = Math.max(0, Math.min(1, 7 / daysUntilDue)); // Higher priority for assignments due sooner
-  const pointsWeight = assignment.points / 100; // Higher priority for assignments worth more points
-  
-  return (timeUrgency * 0.6) + (pointsWeight * 0.4); // Weighted average
+  const priorityAssignment = {
+    title: assignment.title,
+    dueDate: assignment.dueDate,
+    points: assignment.points,
+    maxPoints: 100, // You might want to get this from the assignment data
+    courseWeight: 1, // You might want to get this from course settings
+    courseName: assignment.courseName
+  };
+
+  const priority = priorityCalculator.calculatePriority(priorityAssignment);
+  return priority.score; // This maintains compatibility with existing code
 }
 
 // Update the highlightDates function to send data to extension
@@ -337,67 +341,19 @@ function highlightDates() {
   sendAssignmentsToExtension(Array.from(processedAssignments.values()));
 }
 
-// Update the updateDebugPanel function to include more details
+// Update the updateDebugPanel function to only handle data without creating a visible panel
 function updateDebugPanel(processedAssignments) {
-  let panel = document.getElementById('debug-panel');
-  if (!panel) {
-    panel = document.createElement('div');
-    panel.id = 'debug-panel';
-    panel.style.cssText = `
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      background: rgba(0, 0, 0, 0.9);
-      color: white;
-      padding: 15px;
-      border-radius: 5px;
-      font-family: monospace;
-      font-size: 12px;
-      z-index: 9999;
-      max-height: 400px;
-      overflow-y: auto;
-      box-shadow: 0 0 10px rgba(0,0,0,0.5);
-    `;
-    document.body.appendChild(panel);
-  }
-
   const assignments = Array.from(processedAssignments.values());
   assignments.sort((a, b) => calculateAssignmentPriority(b) - calculateAssignmentPriority(a));
 
-  panel.innerHTML = `
-    <div style="margin-bottom: 10px; color: #ffd700; font-weight: bold;">
-      🔍 Assignment Points Debug
-    </div>
-    <div style="margin-bottom: 10px;">
-      <div style="color: #0066cc; margin-bottom: 5px;">
-        Found ${assignments.length} unique assignments
-      </div>
-      ${assignments.map(a => {
-        const priority = calculateAssignmentPriority(a);
-        const priorityColor = priority > 0.7 ? '#ff6b6b' : 
-                            priority > 0.4 ? '#ffd700' : '#90EE90';
-        return `
-          <div style="margin: 8px 0; padding: 8px; border-left: 2px solid ${priorityColor}; background: rgba(255,255,255,0.1);">
-            <div style="margin-bottom: 4px;">📚 ${a.title}</div>
-            <div style="color: #90EE90; margin-bottom: 4px;">
-              📝 ${a.points} ${a.pointsText}
-            </div>
-            <div style="color: #ADD8E6; font-size: 11px;">
-              ⏰ Due: ${a.dueDate}
-            </div>
-            ${a.courseName ? `
-              <div style="color: #DDA0DD; font-size: 11px;">
-                📚 Course: ${a.courseName}
-              </div>
-            ` : ''}
-            <div style="color: ${priorityColor}; font-size: 11px; margin-top: 4px;">
-              ⚡ Priority: ${Math.round(priority * 100)}%
-            </div>
-          </div>
-        `;
-      }).join('')}
-    </div>
-  `;
+  // Just log to console instead of creating a visible panel
+  console.log('Processed Assignments:', assignments.map(a => ({
+    title: a.title,
+    points: `${a.points} ${a.pointsText}`,
+    dueDate: a.dueDate,
+    courseName: a.courseName,
+    priority: Math.round(calculateAssignmentPriority(a) * 100) + '%'
+  })));
 }
 
 // Wait for page to load
@@ -410,414 +366,818 @@ if (document.readyState === 'loading') {
 // Also try after a short delay for dynamic content
 setTimeout(highlightDates, 2000);
 
-class AssignmentPrioritizer {
-  constructor() {
-    this.assignments = [];
+// Import priority system (at the top of content.js)
+class PriorityCalculator {
+  constructor(thresholds = { HIGH: 0.7, MEDIUM: 0.4 }, weights = { DUE_DATE: 0.6, POINTS: 0.3, COURSE_WEIGHT: 0.1 }) {
+    this.thresholds = thresholds;
+    this.weights = weights;
   }
 
-  async initialize() {
-    logInfo('🚀 Initializing AssignmentPrioritizer');
-    
-    try {
-      // Add debug styles and highlight dates
-      injectDateDebugStyles();
-      highlightDates();
-      
-      // Create a debug panel for dates
-      this.createDateDebugPanel();
-      
-      // Wait for API data to load
-      await this.waitForAPIData();
-      
-      // Get assignments from multiple sources
-      const assignments = await Promise.all([
-        this.fetchPlannerItems(),
-        this.fetchMissingSubmissions(),
-        this.parseDashboardCards()
-      ]);
+  calculatePriority(assignment) {
+    const timeUrgency = this.calculateTimeUrgency(assignment.dueDate);
+    const pointsWeight = this.calculatePointsWeight(assignment.points);
+    const courseWeight = this.calculateCourseWeight(assignment.courseWeight);
 
-      this.assignments = assignments.flat().filter(Boolean);
+    const score = 
+      timeUrgency * this.weights.DUE_DATE +
+      pointsWeight * this.weights.POINTS +
+      courseWeight * this.weights.COURSE_WEIGHT;
+
+    return {
+      level: this.getPriorityLevel(score),
+      score,
+      factors: {
+        timeUrgency,
+        pointsWeight,
+        courseWeight
+      }
+    };
+  }
+
+  calculateTimeUrgency(dueDate) {
+    try {
+      // Parse the date string (e.g., "Feb 24 at 11:59pm")
+      const [monthDay, time] = dueDate.split(' at ');
+      const [month, day] = monthDay.split(' ');
       
-      if (this.assignments.length > 0) {
-        this.calculatePriorities();
-        this.displayPriorities();
-        globalAssignments = this.assignments; // Update global assignments
+      // Create date object for due date
+      const now = new Date();
+      const due = new Date(`${month} ${day}, ${now.getFullYear()} ${time}`);
+      
+      // If the due date appears to be in the past, it's probably for next year
+      if (due < now) {
+        due.setFullYear(due.getFullYear() + 1);
       }
 
-      logInfo('✅ Initialization complete');
+      // Calculate days until due
+      const daysUntilDue = Math.ceil((due - now) / (1000 * 60 * 60 * 24));
+
+      // Log for debugging
+      console.log('Due date calculation:', {
+        original: dueDate,
+        parsed: due.toLocaleString(),
+        daysUntilDue: daysUntilDue
+      });
+
+      return daysUntilDue;
     } catch (error) {
-      logError('Error during initialization:', error);
+      console.error('Error calculating days until due:', error, { dueDate });
+      return null;
     }
   }
 
-  async waitForAPIData() {
-    logInfo('⏳ Waiting for API data to load...');
-    await new Promise(resolve => setTimeout(resolve, 2000));
+  calculatePointsWeight(points, maxPoints = 100) {
+    return Math.min(1, points / maxPoints);
   }
 
-  async fetchPlannerItems() {
-    try {
-      const response = await fetch('/api/v1/planner/items?per_page=50', {
-        headers: {
-          'Accept': 'application/json+canvas-string-ids, application/json',
-          'X-Requested-With': 'XMLHttpRequest'
-        },
-        credentials: 'same-origin'
-      });
+  calculateCourseWeight(weight = 1) {
+    return Math.min(1, weight);
+  }
+
+  getPriorityLevel(score) {
+    if (score >= this.thresholds.HIGH) return 'high';
+    if (score >= this.thresholds.MEDIUM) return 'medium';
+    return 'low';
+  }
+}
+
+// Create and inject the button and popup
+(function() {
+  // Create a global variable to store assignments
+  let assignmentData = [];
+
+  // Function to collect assignments
+  function collectAssignments() {
+    const assignments = [];
+    const assignmentContainers = document.querySelectorAll('div[data-testid="planner-item-raw"]');
+    
+    console.log('Found assignment containers:', assignmentContainers.length);
+
+    assignmentContainers.forEach(container => {
+      const assignmentLink = container.querySelector('a[href*="/assignments/"]');
+      const pointsSpan = container.querySelector('span.css-mum2ig-text[wrap="normal"][letter-spacing="normal"]');
+      const ptsSpan = container.querySelector('span.css-1uakmj8-text');
       
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      
-      const items = await response.json();
-      logDebug('Planner items retrieved:', items);
+      // Get date from the screenreader content
+      const screenReaderSpan = container.querySelector('.css-1sr5vj2-screenReaderContent');
 
-      return items.map(item => {
-        let type = 'unknown';
-        let weight = 0.2;
-        let debugClass = '';
-
-        switch(item.plannable_type?.toLowerCase()) {
-          case 'quiz':
-          case 'quizzes/quiz':
-            type = 'quiz';
-            weight = 0.3;
-            debugClass = 'debug-highlight-quiz';
-            break;
-          case 'assignment':
-            type = 'assignment';
-            weight = 0.4;
-            debugClass = 'debug-highlight-assignment';
-            break;
-          case 'discussion_topic':
-            type = 'discussion';
-            weight = 0.2;
-            debugClass = 'debug-highlight-discussion';
-            break;
-          case 'announcement':
-            type = 'announcement';
-            weight = 0.1;
-            debugClass = 'debug-highlight-announcement';
-            break;
-        }
-
-        // Get and highlight the element
-        const element = document.querySelector(
-          `[data-item-id="${item.plannable_id}"], ` +
-          `[data-assignment-id="${item.plannable_id}"], ` +
-          `[data-quiz-id="${item.plannable_id}"]`
-        );
-
-        // Get points from multiple sources
-        let points = null;
+      if (assignmentLink && pointsSpan) {
+        const points = parseInt(pointsSpan.textContent);
+        const pointsText = ptsSpan ? ptsSpan.textContent.trim() : 'pts';
+        const fullTitle = assignmentLink.textContent.trim();
         
-        // 1. Try to get points from the API response
-        if (item.plannable?.points_possible) {
-          points = item.plannable.points_possible;
-        }
-        
-        // 2. Try to get points from the DOM element
-        if (element) {
-          // Look for the points span with specific class
-          const pointsSpan = element.querySelector('span.css-mum2ig-text');
-          if (pointsSpan) {
-            const pointsValue = parseInt(pointsSpan.textContent);
-            if (!isNaN(pointsValue)) {
-              points = pointsValue;
-            }
-          }
-          
-          // If still no points, try screen reader text
-          if (points === null) {
-            const srText = element.querySelector('.css-1sr5vj2-screenReaderContent')?.textContent;
-            if (srText) {
-              const pointsMatch = srText.match(/(\d+)\s*points?/i);
-              if (pointsMatch) {
-                points = parseInt(pointsMatch[1]);
-              }
-            }
+        // Get course name
+        const courseSpan = container.querySelector('span.css-xqopp9-text');
+        let courseName = 'Unknown Course';
+        if (courseSpan) {
+          const courseText = courseSpan.textContent;
+          const courseMatch = courseText.split(' - ');
+          if (courseMatch.length >= 3) {
+            courseName = courseMatch[2]
+              .replace(/(Quiz|Assignment|Discussion)$/i, '')
+              .trim();
           }
         }
 
-        // Add debug highlighting
-        if (element) {
-          element.classList.add('debug-highlight', debugClass);
-          element.setAttribute('data-debug-type', type.toUpperCase());
-          if (points !== null) {
-            element.setAttribute('data-points', points);
+        // Extract date from screen reader content
+        let dueDate = '';
+        if (screenReaderSpan) {
+          const text = screenReaderSpan.textContent;
+          // Look for date pattern in the text
+          const dateMatch = text.match(/due\s+([^\.]+)/i);
+          if (dateMatch) {
+            dueDate = dateMatch[1].trim();
+            console.log('Extracted date:', {
+              fullText: text,
+              match: dateMatch[0],
+              dueDate: dueDate
+            });
           }
         }
 
-        // Log what we found
-        console.log('Assignment processed:', {
-          title: item.plannable?.title || item.plannable?.name,
-          type: type,
-          points: points,
-          elementFound: !!element,
-          apiPoints: item.plannable?.points_possible
-        });
+        // Get the assignment URL
+        const link = assignmentLink.href;
 
-        return {
-          title: item.plannable?.title || item.plannable?.name,
-          dueDate: item.plannable_date ? new Date(item.plannable_date) : null,
-          courseName: item.context_name,
-          points: points,
-          type: type,
-          weight: weight,
-          url: item.html_url,
-          element: element,
-          priority: 0,
-          details: {
-            submissionType: item.plannable?.submission_types,
-            isCompleted: item.planner_override?.marked_complete || false,
-            isLocked: item.plannable?.locked_for_user || false,
-            description: item.plannable?.description
-          }
-        };
-      }).filter(item => item.title && item.dueDate);
-    } catch (error) {
-      logError('Error fetching planner items:', error);
-      return [];
-    }
+        if (!isNaN(points)) {
+          const assignment = {
+            title: cleanAssignmentTitle(fullTitle),
+            dueDate: dueDate || 'No due date set',
+            daysRemaining: dueDate ? calculateDaysRemaining(dueDate) : null,
+            points: points,
+            pointsText: pointsText,
+            courseName: courseName,
+            link: link // Add the link to the assignment object
+          };
+
+          console.log('Processed assignment:', assignment);
+          assignments.push(assignment);
+        }
+      }
+    });
+
+    return assignments;
   }
 
-  async fetchMissingSubmissions() {
-    try {
-      const response = await fetch('/api/v1/users/self/missing_submissions?include[]=planner_overrides', {
-        headers: {
-          'Accept': 'application/json',
-          'X-Requested-With': 'XMLHttpRequest'
-        },
-        credentials: 'same-origin'
-      });
-      
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      
-      const submissions = await response.json();
-      logDebug('Missing submissions retrieved:', submissions);
+  // Function to update popup content
+  function updatePopupContent() {
+    const content = popup.querySelector('.popup-content');
+    if (!content) return;
 
-      return submissions.map(submission => ({
-        title: submission.name || submission.assignment?.name,
-        dueDate: submission.due_at ? new Date(submission.due_at) : null,
-        courseName: submission.course?.name,
-        points: submission.points_possible,
-        type: 'missing_submission',
-        url: submission.html_url,
-        element: document.querySelector(`[data-assignment-id="${submission.id}"]`),
-        priority: 0
-      })).filter(item => item.title && item.dueDate);
-    } catch (error) {
-      logError('Error fetching missing submissions:', error);
-      return [];
+    const assignments = collectAssignments();
+    console.log('Assignments for popup:', assignments);
+
+    if (assignments.length === 0) {
+      content.innerHTML = '<div class="no-assignments">No assignments found</div>';
+      return;
     }
-  }
 
-  async parseDashboardCards() {
-    try {
-      const response = await fetch('/api/v1/dashboard/dashboard_cards', {
-        headers: {
-          'Accept': 'application/json+canvas-string-ids, application/json',
-          'X-Requested-With': 'XMLHttpRequest'
-        },
-        credentials: 'same-origin'
-      });
-      
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      
-      const cards = await response.json();
-      logDebug('Dashboard cards retrieved:', cards);
+    // Sort assignments by due date
+    assignments.sort((a, b) => {
+      const dateA = new Date(a.dueDate.replace(/^Due\s+/i, ''));
+      const dateB = new Date(b.dueDate.replace(/^Due\s+/i, ''));
+      return dateA - dateB;
+    });
 
-      // Process assignments from dashboard cards
-      const assignments = [];
-      for (const card of cards) {
-        if (card.assignments) {
-          assignments.push(...card.assignments.map(assignment => {
-            // Determine assignment type from HTML elements
-            const element = document.querySelector(`[data-assignment-id="${assignment.id}"]`);
-            let type = 'assignment';
-            let weight = 0.4;
+    // Update button count
+    button.textContent = assignments.length;
 
-            if (element) {
-              const iconElement = element.querySelector('.icon-quiz, .icon-assignment, .icon-discussion');
-              if (iconElement) {
-                if (iconElement.classList.contains('icon-quiz')) {
-                  type = 'quiz';
-                  weight = 0.3;
-                } else if (iconElement.classList.contains('icon-discussion')) {
-                  type = 'discussion';
-                  weight = 0.2;
+    // Generate HTML for assignments with clickable links
+    content.innerHTML = assignments.map(assignment => {
+      // Get the href from the original link
+      const assignmentLink = assignment.link || '#';
+
+      return `
+        <div class="assignment-card">
+          <a href="${assignmentLink}" class="assignment-title" target="_blank">${assignment.title}</a>
+          <div class="assignment-details">
+            <div class="due-info">
+              <div class="due-date">
+                ${assignment.dueDate}
+              </div>
+              <div class="time-remaining ${assignment.daysRemaining <= 2 ? 'urgent' : ''}">
+                ${
+                  assignment.daysRemaining === null ? '' :
+                  assignment.daysRemaining < 0 ? '⚠️ Past due!' :
+                  assignment.daysRemaining === 0 ? '⚠️ Due today!' :
+                  assignment.daysRemaining === 1 ? '⚠️ Due tomorrow!' :
+                  assignment.daysRemaining === 2 ? '⚡ Due in 2 days!' :
+                  `${assignment.daysRemaining} days remaining`
                 }
-              }
-            }
+              </div>
+            </div>
+            <div class="course-info">
+              <div class="course">${assignment.courseName}</div>
+              <div class="points">Points: ${assignment.points} ${assignment.pointsText}</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
 
-            return {
-              title: assignment.name,
-              dueDate: assignment.due_at ? new Date(assignment.due_at) : null,
-              courseName: card.shortName,
-              points: assignment.points_possible,
-              type: type,
-              weight: weight,
-              url: assignment.html_url,
-              element: element,
-              priority: 0,
-              details: {
-                submissionType: assignment.submission_types,
-                isCompleted: assignment.has_submitted_submissions,
-                isLocked: assignment.locked_for_user,
-                description: assignment.description
-              }
-            };
-          }));
-        }
+    // Add styles for the links
+    const style = document.createElement('style');
+    style.textContent = `
+      .assignment-title {
+        color: #2d3b45;
+        text-decoration: none;
+        font-weight: bold;
+        display: block;
+        margin-bottom: 8px;
+        transition: color 0.2s;
       }
-
-      return assignments.filter(item => item.title && item.dueDate);
-    } catch (error) {
-      logError('Error parsing dashboard cards:', error);
-      return [];
-    }
-  }
-
-  async getAssignmentWeight(element) {
-    // Try to get weight from assignment groups
-    const groupName = element.querySelector('.assignment-group-name')?.textContent;
-    if (groupName) {
-      // You might want to store these weights in extension storage
-      const commonWeights = {
-        'Homework': 0.3,
-        'Quizzes': 0.2,
-        'Exams': 0.4,
-        'Participation': 0.1
-      };
-      
-      for (const [category, weight] of Object.entries(commonWeights)) {
-        if (groupName.toLowerCase().includes(category.toLowerCase())) {
-          return weight;
-        }
+      .assignment-title:hover {
+        color: #0055a2;
+        text-decoration: underline;
       }
-    }
-    
-    return 0.2; // Default weight if not found
-  }
-
-  async getCourseGrade(element) {
-    // Try to get grade from the course card or grades page
-    const gradeElement = element.closest('.course-card')?.querySelector('.grade') ||
-                        document.querySelector(`a[href*="${element.dataset.courseId}"] .grade`);
-    
-    if (gradeElement) {
-      const gradeText = gradeElement.textContent.trim();
-      const gradeMatch = gradeText.match(/(\d+\.?\d*)%?/);
-      if (gradeMatch) {
-        return parseFloat(gradeMatch[1]) / 100;
+      .dark-theme .assignment-title {
+        color: #fff;
       }
+      .dark-theme .assignment-title:hover {
+        color: #66b0ff;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  // Styles for both button and popup
+  const styles = document.createElement('style');
+  styles.textContent = `
+    #canvas-assignment-button {
+      position: fixed !important;
+      top: 20px !important;
+      right: 20px !important;
+      width: 40px !important;
+      height: 40px !important;
+      background-color: #0374B5 !important;
+      border-radius: 50% !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      color: white !important;
+      font-weight: bold !important;
+      font-family: Arial, sans-serif !important;
+      cursor: pointer !important;
+      z-index: 999999 !important;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.2) !important;
     }
-    
-    return 0.85; // Default grade if not found
-  }
 
-  isValidAssignment(assignment) {
-    return assignment.title && 
-           assignment.dueDate && 
-           !isNaN(assignment.weight);
-  }
-
-  calculatePriorities() {
-    for (const assignment of this.assignments) {
-      const daysUntilDue = this.calculateDaysUntilDue(assignment.dueDate);
-      const gradeImpact = assignment.weight / 100;
-      const courseGradeImpact = 1 - assignment.courseGrade;
-
-      assignment.priority = (
-        (gradeImpact * PRIORITY_WEIGHTS.GRADE_IMPACT) +
-        (courseGradeImpact * PRIORITY_WEIGHTS.COURSE_GRADE) +
-        (1 / Math.max(daysUntilDue, 1) * PRIORITY_WEIGHTS.DUE_DATE)
-      );
+    #canvas-assignment-popup {
+      position: fixed;
+      right: 20px;
+      top: 70px;
+      width: 300px;
+      background: white;
+      border-radius: 10px;
+      box-shadow: 0 2px 20px rgba(0,0,0,0.2);
+      z-index: 999999;
+      overflow: hidden;
+      display: none;
     }
 
-    // Sort assignments by priority
-    this.assignments.sort((a, b) => b.priority - a.priority);
-  }
+    #canvas-assignment-popup.visible {
+      display: block;
+    }
 
-  calculateDaysUntilDue(dueDate) {
-    const now = new Date();
-    const diffTime = dueDate - now;
-    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  }
+    .popup-header {
+      padding: 15px;
+      background: #f8f9fa;
+      border-bottom: 1px solid #e9ecef;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
 
-  displayPriorities() {
-    this.assignments.forEach((assignment, index) => {
-      const priorityLabel = this.createPriorityLabel(assignment);
-      assignment.element.insertBefore(priorityLabel, assignment.element.firstChild);
+    .popup-header h2 {
+      margin: 0;
+      font-size: 16px;
+      color: #333;
+    }
+
+    .popup-content {
+      padding: 15px;
+      overflow-y: auto;
+      max-height: 400px;
+    }
+
+    .assignment-card {
+      padding: 15px;
+      margin-bottom: 12px;
+      background: #f8f9fa;
+      border-radius: 8px;
+      border-left: 4px solid #0374B5;
+      transition: transform 0.2s ease;
+    }
+
+    .assignment-card:hover {
+      transform: translateX(5px);
+    }
+
+    .assignment-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 10px;
+    }
+
+    .assignment-details {
+      font-size: 13px;
+    }
+
+    .due-info {
+      margin-bottom: 8px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid rgba(0,0,0,0.1);
+    }
+
+    .due-date {
+      color: #0374B5;
+      margin-bottom: 4px;
+    }
+
+    .due-label {
+      font-weight: 500;
+    }
+
+    .due-datetime {
+      color: #333;
+    }
+
+    .time-remaining {
+      font-size: 12px;
+      color: #666;
+    }
+
+    .time-remaining.urgent {
+      color: #dc3545;
+      font-weight: 500;
+    }
+
+    .course-info {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      color: #666;
+    }
+
+    .course {
+      font-weight: 500;
+    }
+
+    .points {
+      color: #0374B5;
+    }
+
+    .priority-badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: bold;
+      color: white;
+    }
+
+    .high-priority {
+      border-left-color: #dc3545;
+    }
+
+    .medium-priority {
+      border-left-color: #ffc107;
+    }
+
+    .low-priority {
+      border-left-color: #28a745;
+    }
+
+    .high-badge {
+      background: #dc3545;
+    }
+
+    .medium-badge {
+      background: #ffc107;
+      color: #000;
+    }
+
+    .low-badge {
+      background: #28a745;
+    }
+
+    .close-button {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 18px;
+      color: #666;
+      padding: 5px;
+    }
+
+    .close-button:hover {
+      color: #333;
+    }
+
+    .header-controls {
+      display: flex;
+      gap: 8px;
+    }
+
+    .icon-button {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 16px;
+      color: #666;
+      padding: 5px;
+      border-radius: 4px;
+    }
+
+    .icon-button:hover {
+      background: rgba(0,0,0,0.1);
+      color: #333;
+    }
+
+    .assignment-card.high-priority {
+      border-left-color: #dc3545;
+      background: rgba(220, 53, 69, 0.05);
+    }
+
+    .assignment-card.medium-priority {
+      border-left-color: #ffc107;
+      background: rgba(255, 193, 7, 0.05);
+    }
+
+    .assignment-card.low-priority {
+      border-left-color: #28a745;
+      background: rgba(40, 167, 69, 0.05);
+    }
+
+    .popup-content, .settings-panel {
+      transition: transform 0.3s ease;
+    }
+
+    .settings-panel {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: white;
+      display: none;
+    }
+
+    .settings-panel.visible {
+      display: block;
+    }
+
+    .popup-content.hidden {
+      transform: translateX(-100%);
+    }
+
+    .settings-header {
+      padding: 15px;
+      background: #f8f9fa;
+      border-bottom: 1px solid #e9ecef;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .back-button {
+      padding: 8px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: #666;
+    }
+
+    .back-button:hover {
+      color: #333;
+    }
+
+    .settings-content {
+      padding: 15px;
+      overflow-y: auto;
+      max-height: 400px;
+    }
+
+    .settings-section {
+      margin-bottom: 20px;
+      padding-bottom: 15px;
+      border-bottom: 1px solid #eee;
+    }
+
+    .settings-section h4 {
+      color: #0374B5;
+      margin: 0 0 15px 0;
+      font-size: 14px;
+    }
+
+    .setting-item {
+      margin-bottom: 15px;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      margin-bottom: 5px;
+    }
+
+    .value-display {
+      text-align: right;
+      color: #666;
+      font-size: 12px;
+    }
+
+    select {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+
+    .checkbox-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .priority-info {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(0,0,0,0.1);
+    }
+
+    .priority-details {
+      display: flex;
+      gap: 10px;
+      margin-top: 5px;
+      font-size: 11px;
+      color: #666;
+    }
+
+    .priority-factor {
+      background: rgba(0,0,0,0.05);
+      padding: 2px 6px;
+      border-radius: 3px;
+    }
+
+    .high-priority {
+      border-left-color: #dc3545 !important;
+      background: linear-gradient(to right, rgba(220,53,69,0.1), transparent) !important;
+    }
+
+    .medium-priority {
+      border-left-color: #ffc107 !important;
+      background: linear-gradient(to right, rgba(255,193,7,0.1), transparent) !important;
+    }
+
+    .low-priority {
+      border-left-color: #28a745 !important;
+      background: linear-gradient(to right, rgba(40,167,69,0.1), transparent) !important;
+    }
+
+    .priority-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 3px;
+      font-size: 11px;
+      font-weight: bold;
+    }
+
+    .high-priority .priority-badge {
+      background: #dc3545;
+      color: white;
+    }
+
+    .medium-priority .priority-badge {
+      background: #ffc107;
+      color: black;
+    }
+
+    .low-priority .priority-badge {
+      background: #28a745;
+      color: white;
+    }
+  `;
+  document.head.appendChild(styles);
+
+  // Create button
+  const button = document.createElement('div');
+  button.id = 'canvas-assignment-button';
+  button.textContent = '0';
+
+  // Create the popup structure with both assignments and settings panels
+  const popup = document.createElement('div');
+  popup.id = 'canvas-assignment-popup';
+  popup.innerHTML = `
+    <div class="popup-header">
+      <h2>Assignment Priorities</h2>
+      <div class="header-controls">
+        <button class="icon-button settings-button" title="Settings">⚙️</button>
+        <button class="close-button" title="Close">×</button>
+      </div>
+    </div>
+
+    <!-- Main assignments panel -->
+    <div class="popup-content" id="assignments-panel">
+      <div id="assignments-list"></div>
+    </div>
+
+    <!-- Settings panel -->
+    <div class="settings-panel" id="settings-panel">
+      <div class="settings-header">
+        <button class="back-button">← Back</button>
+        <h3>Settings</h3>
+      </div>
+      <div class="settings-content">
+        <div class="settings-section">
+          <h4>Text Size</h4>
+          <div class="setting-item">
+            <input type="range" id="textSize" min="12" max="24" value="16">
+            <div class="value-display"><span id="textSizeValue">16</span>px</div>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h4>Window Transparency</h4>
+          <div class="setting-item">
+            <input type="range" id="transparency" min="50" max="100" value="100">
+            <div class="value-display"><span id="transparencyValue">100</span>%</div>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h4>High Contrast</h4>
+          <div class="setting-item">
+            <input type="range" id="contrast" min="100" max="200" value="100">
+            <div class="value-display"><span id="contrastValue">100</span>%</div>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h4>Theme</h4>
+          <div class="setting-item">
+            <select id="theme">
+              <option value="light">Light Mode</option>
+              <option value="dark">Dark Mode</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Add elements to page
+  document.body.appendChild(button);
+  document.body.appendChild(popup);
+
+  // Add event listeners
+  button.addEventListener('click', (e) => {
+    e.stopPropagation();
+    popup.classList.toggle('visible');
+    if (popup.classList.contains('visible')) {
+      updatePopupContent(); // Update content when showing popup
+    }
+  });
+
+  popup.querySelector('.close-button').addEventListener('click', (e) => {
+    e.stopPropagation();
+    popup.classList.remove('visible');
+  });
+
+  // Close popup when clicking outside
+  document.addEventListener('click', (e) => {
+    if (!popup.contains(e.target) && !button.contains(e.target)) {
+      popup.classList.remove('visible');
+    }
+  });
+
+  // Prevent popup from closing when clicking inside
+  popup.addEventListener('click', (e) => {
+    e.stopPropagation();
+  });
+
+  // Update the settings button click handler
+  popup.querySelector('.settings-button').addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.getElementById('assignments-panel').classList.add('hidden');
+    document.getElementById('settings-panel').classList.add('visible');
+  });
+
+  // Add back button handler
+  popup.querySelector('.back-button').addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.getElementById('assignments-panel').classList.remove('hidden');
+    document.getElementById('settings-panel').classList.remove('visible');
+  });
+
+  // Add settings change handlers
+  document.getElementById('textSize').addEventListener('input', (e) => {
+    const value = e.target.value;
+    document.getElementById('textSizeValue').textContent = value;
+    popup.style.fontSize = value + 'px';
+    saveSettings({ textSize: value });
+  });
+
+  document.getElementById('transparency').addEventListener('input', (e) => {
+    const value = e.target.value;
+    document.getElementById('transparencyValue').textContent = value;
+    popup.style.opacity = value / 100;
+    saveSettings({ transparency: value });
+  });
+
+  document.getElementById('theme').addEventListener('change', (e) => {
+    const isDark = e.target.value === 'dark';
+    popup.classList.toggle('dark-theme', isDark);
+    saveSettings({ theme: e.target.value });
+  });
+
+  document.getElementById('contrast').addEventListener('input', (e) => {
+    const value = e.target.value;
+    document.getElementById('contrastValue').textContent = value;
+    updateContrast(value);
+    saveSettings({ contrast: value });
+  });
+
+  // Function to save settings
+  function saveSettings(changes) {
+    chrome.storage.sync.get(null, (currentSettings) => {
+      const newSettings = { ...currentSettings, ...changes };
+      chrome.storage.sync.set(newSettings);
     });
   }
 
-  createPriorityLabel(assignment) {
-    const label = document.createElement('div');
-    label.className = 'priority-label';
+  // Load saved settings
+  chrome.storage.sync.get({
+    textSize: 16,
+    transparency: 100,
+    theme: 'light',
+    contrast: 100
+  }, (settings) => {
+    document.getElementById('textSize').value = settings.textSize;
+    document.getElementById('textSizeValue').textContent = settings.textSize;
+    popup.style.fontSize = settings.textSize + 'px';
+
+    document.getElementById('transparency').value = settings.transparency;
+    document.getElementById('transparencyValue').textContent = settings.transparency;
+    popup.style.opacity = settings.transparency / 100;
+
+    document.getElementById('theme').value = settings.theme;
+    popup.classList.toggle('dark-theme', settings.theme === 'dark');
+
+    document.getElementById('contrast').value = settings.contrast;
+    document.getElementById('contrastValue').textContent = settings.contrast;
+    updateContrast(settings.contrast);
+  });
+
+  // Call updatePopupContent when assignments change
+  highlightDates();
+  updatePopupContent();
+
+  console.log('Assignment button and popup injected');
+})();
+
+// Update calculateDaysRemaining function
+function calculateDaysRemaining(dueDate) {
+  try {
+    // Parse the date string (e.g., "Monday, February 24, 2025 11:59 PM")
+    const parts = dueDate.split(/[,\s]+/).filter(part => part); // Remove empty strings
     
-    const priority = assignment.priority;
-    if (priority > 0.7) {
-      label.classList.add('high-priority');
-      label.textContent = 'High Priority';
-    } else if (priority > 0.4) {
-      label.classList.add('medium-priority');
-      label.textContent = 'Medium Priority';
-    } else {
-      label.classList.add('low-priority');
-      label.textContent = 'Low Priority';
-    }
+    // Log the parts for debugging
+    console.log('Date parts:', parts);
 
-    return label;
-  }
+    // Extract components - parts should be [Monday, February, 24, 2025, 11:59, PM]
+    const month = parts[1];
+    const day = parseInt(parts[2]);
+    const year = parseInt(parts[3]);
+    const time = `${parts[4]} ${parts[5]}`;
 
-  createDateDebugPanel() {
-    const panel = document.createElement('div');
-    panel.id = 'date-debug-panel';
-    panel.style.cssText = `
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      background: rgba(0, 0, 0, 0.9);
-      color: white;
-      padding: 15px;
-      border-radius: 5px;
-      font-family: monospace;
-      font-size: 12px;
-      z-index: 9999;
-      max-height: 300px;
-      overflow-y: auto;
-      box-shadow: 0 0 10px rgba(0,0,0,0.5);
-    `;
+    // Create date string in a format that Date constructor can parse
+    const dateStr = `${month} ${day}, ${year} ${time}`;
+    const due = new Date(dateStr);
+    const now = new Date();
 
-    // Add content to the panel
-    panel.innerHTML = `
-      <div style="margin-bottom: 10px; color: #ffd700; font-weight: bold;">
-        📅 Date Detection Debug
-      </div>
-      <div id="date-debug-content"></div>
-    `;
+    // Calculate days remaining
+    const daysRemaining = Math.ceil((due - now) / (1000 * 60 * 60 * 24));
 
-    document.body.appendChild(panel);
-    this.updateDateDebugPanel();
-  }
+    console.log('Date calculation:', {
+      original: dueDate,
+      parts: parts,
+      dateString: dateStr,
+      parsed: {
+        month,
+        day,
+        year,
+        time,
+        fullDate: due.toLocaleString()
+      },
+      daysRemaining
+    });
 
-  // Add method to update the debug panel
-  updateDateDebugPanel() {
-    const content = document.getElementById('date-debug-content');
-    if (!content) return;
-
-    const dateElements = document.querySelectorAll('.debug-date');
-    const dates = Array.from(dateElements).map(el => ({
-      text: el.textContent.trim(),
-      type: el.getAttribute('data-date-type') || 'unknown'
-    }));
-
-    content.innerHTML = `
-      <div>Found ${dates.length} dates</div>
-      ${dates.map(date => `
-        <div style="margin-top: 5px; font-size: 11px;">
-          <span style="color: #ffd700;">${date.type}:</span> ${date.text}
-        </div>
-      `).join('')}
-    `;
+    return daysRemaining;
+  } catch (error) {
+    console.error('Error calculating days remaining:', error, {
+      dueDate: dueDate,
+      stack: error.stack
+    });
+    return null;
   }
 }
