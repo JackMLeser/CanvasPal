@@ -243,140 +243,102 @@ function injectDateDebugStyles() {
   document.head.appendChild(styleElement);
 }
 
-// Simple date highlighting function
+function cleanAssignmentTitle(fullTitle) {
+  // Remove the "Assignment" prefix and extract the actual title
+  const titleMatch = fullTitle.match(/Assignment (.*?)(?:, due|$)/);
+  return titleMatch ? titleMatch[1] : fullTitle;
+}
+
+function extractDueDate(fullTitle) {
+  // Extract the due date from the title
+  const dateMatch = fullTitle.match(/due (.*?)(?:\.|$)/);
+  return dateMatch ? dateMatch[1] : '';
+}
+
+// Add this function to send data to the extension popup
+function sendAssignmentsToExtension(assignments) {
+  chrome.runtime.sendMessage({
+    type: 'ASSIGNMENTS_UPDATE',
+    data: assignments.map(a => ({
+      title: a.title,
+      points: a.points,
+      pointsText: a.pointsText,
+      dueDate: a.dueDate,
+      courseName: a.courseName || 'Unknown Course',
+      priority: calculateAssignmentPriority(a)
+    }))
+  });
+}
+
+// Add priority calculation function
+function calculateAssignmentPriority(assignment) {
+  const now = new Date();
+  const dueDate = new Date(assignment.dueDate);
+  const daysUntilDue = Math.ceil((dueDate - now) / (1000 * 60 * 60 * 24));
+  
+  // Priority factors
+  const timeUrgency = Math.max(0, Math.min(1, 7 / daysUntilDue)); // Higher priority for assignments due sooner
+  const pointsWeight = assignment.points / 100; // Higher priority for assignments worth more points
+  
+  return (timeUrgency * 0.6) + (pointsWeight * 0.4); // Weighted average
+}
+
+// Update the highlightDates function to send data to extension
 function highlightDates() {
-  // Enhanced style to handle assignments and dates
-  const style = document.createElement('style');
-  style.textContent = `
-    .date-highlight {
-      background-color: yellow !important;
-      outline: 2px solid orange !important;
-      position: relative !important;
-    }
-    .assignment-highlight {
-      background-color: #e6f3ff !important;
-      outline: 2px solid #0066cc !important;
-      position: relative !important;
-    }
-    .date-highlight::before, .assignment-highlight::before {
-      content: attr(data-date-type);
-      position: absolute;
-      top: -20px;
-      left: 0;
-      font-size: 10px;
-      padding: 2px 4px;
-      border-radius: 2px;
-      z-index: 9999;
-    }
-    .date-highlight::before {
-      background: orange;
-      color: black;
-    }
-    .assignment-highlight::before {
-      background: #0066cc;
-      color: white;
-    }
-    .due-date {
-      background-color: #ffcccb !important;
-      outline: 2px solid red !important;
-    }
-    .due-date::before {
-      background: red;
-      color: white;
-    }
-  `;
-  document.head.appendChild(style);
-
-  // Enhanced patterns to capture assignments and dates
-  const patterns = [
-    {
-      pattern: /\bDue:?\s.*(?:am|pm)\b/i,
-      type: 'DUE DATE'
-    },
-    {
-      pattern: /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2}\b/i,
-      type: 'DATE'
-    },
-    {
-      pattern: /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b/i,
-      type: 'DAY'
-    },
-    {
-      pattern: /\b\d{1,2}:\d{2}(?:am|pm)?\b/i,
-      type: 'TIME'
-    }
-  ];
-
-  // Canvas selectors for both dates and assignments
-  const selectors = [
-    // Date selectors
-    '[data-testid="not-today"]',
-    '.Day-styles__secondary',
-    '.PlannerItem-styles__due',
+  const processedAssignments = new Map();
+  const assignmentContainers = document.querySelectorAll('div[data-testid="planner-item-raw"]');
+  
+  assignmentContainers.forEach(container => {
+    const assignmentLink = container.querySelector('a[href*="/assignments/"]');
+    const pointsSpan = container.querySelector('span.css-mum2ig-text[wrap="normal"][letter-spacing="normal"]');
+    const ptsSpan = container.querySelector('span.css-1uakmj8-text');
     
-    // Assignment selectors
-    'a[href*="/assignments/"]',
-    'a[href*="/quizzes/"]',
-    '.css-6t42ud-view-link',
-    '.PlannerItem__Title'
-  ];
-
-  // Process each selector
-  selectors.forEach(selector => {
-    try {
-      const elements = document.querySelectorAll(selector);
-      console.log(`Found ${elements.length} elements for ${selector}`);
+    if (assignmentLink && pointsSpan) {
+      const assignmentId = assignmentLink.href;
       
-      elements.forEach(element => {
-        // Check if it's an assignment link
-        if (element.href && element.href.includes('/assignments/')) {
-          // Get the visible title
-          const visibleTitle = element.querySelector('[aria-hidden="true"]')?.textContent || 
-                             element.textContent;
-          
-          // Get the full description (including due date) from screen reader text
-          const srContent = element.querySelector('.css-1sr5vj2-screenReaderContent')?.textContent || '';
-          
-          element.classList.add('assignment-highlight');
-          element.setAttribute('data-date-type', 'ASSIGNMENT');
-          element.setAttribute('data-assignment-title', visibleTitle.trim());
-          
-          // Extract due date if present in screen reader content
-          const dueMatch = srContent.match(/due\s+(.*?)\./i);
-          if (dueMatch) {
-            element.setAttribute('data-assignment-due', dueMatch[1].trim());
-          }
-          
-          console.log('Found assignment:', {
-            title: visibleTitle.trim(),
-            fullText: srContent,
-            dueDate: dueMatch ? dueMatch[1].trim() : 'No due date found'
-          });
+      if (processedAssignments.has(assignmentId)) return;
+
+      const points = parseInt(pointsSpan.textContent);
+      const pointsText = ptsSpan ? ptsSpan.textContent.trim() : 'pts';
+      const fullTitle = assignmentLink.textContent.trim();
+      
+      if (!isNaN(points)) {
+        // Highlight the points spans
+        pointsSpan.style.backgroundColor = '#90EE90';
+        pointsSpan.style.padding = '0 4px';
+        if (ptsSpan) {
+          ptsSpan.style.backgroundColor = '#ADD8E6';
+          ptsSpan.style.padding = '0 4px';
         }
-        
-        // Check for dates
-        const text = element.textContent;
-        patterns.forEach(({pattern, type}) => {
-          if (pattern.test(text)) {
-            element.classList.add('date-highlight');
-            if (type === 'DUE DATE') {
-              element.classList.add('due-date');
-            }
-            element.setAttribute('data-date-type', type);
-            console.log(`Found ${type}:`, text);
-          }
+
+        // Store assignment info with additional details
+        processedAssignments.set(assignmentId, {
+          fullTitle: fullTitle,
+          title: cleanAssignmentTitle(fullTitle),
+          dueDate: extractDueDate(fullTitle),
+          points: points,
+          pointsText: pointsText,
+          element: container,
+          courseName: container.querySelector('[class*="PlannerItem__Course"]')?.textContent || ''
         });
-      });
-    } catch (err) {
-      console.error('Error processing selector:', selector, err);
+
+        console.log('Found unique assignment:', {
+          title: cleanAssignmentTitle(fullTitle),
+          dueDate: extractDueDate(fullTitle),
+          points: `${points} ${pointsText}`,
+          container: container.outerHTML
+        });
+      }
     }
   });
 
-  // Update the debug panel with both dates and assignments
-  updateDebugPanel();
+  // Update debug panel and send to extension
+  updateDebugPanel(processedAssignments);
+  sendAssignmentsToExtension(Array.from(processedAssignments.values()));
 }
 
-function updateDebugPanel() {
+// Update the updateDebugPanel function to include more details
+function updateDebugPanel(processedAssignments) {
   let panel = document.getElementById('debug-panel');
   if (!panel) {
     panel = document.createElement('div');
@@ -392,44 +354,48 @@ function updateDebugPanel() {
       font-family: monospace;
       font-size: 12px;
       z-index: 9999;
-      max-height: 300px;
+      max-height: 400px;
       overflow-y: auto;
       box-shadow: 0 0 10px rgba(0,0,0,0.5);
     `;
     document.body.appendChild(panel);
   }
 
-  const assignments = Array.from(document.querySelectorAll('.assignment-highlight'))
-    .map(el => ({
-      title: el.getAttribute('data-assignment-title'),
-      dueDate: el.getAttribute('data-assignment-due')
-    }));
-
-  const dates = Array.from(document.querySelectorAll('.date-highlight'))
-    .map(el => ({
-      text: el.textContent.trim(),
-      type: el.getAttribute('data-date-type')
-    }));
+  const assignments = Array.from(processedAssignments.values());
+  assignments.sort((a, b) => calculateAssignmentPriority(b) - calculateAssignmentPriority(a));
 
   panel.innerHTML = `
     <div style="margin-bottom: 10px; color: #ffd700; font-weight: bold;">
-      🔍 Debug Panel
+      🔍 Assignment Points Debug
     </div>
     <div style="margin-bottom: 10px;">
-      <div style="color: #0066cc; margin-bottom: 5px;">Assignments Found: ${assignments.length}</div>
-      ${assignments.map(a => `
-        <div style="margin-left: 10px; font-size: 11px;">
-          📚 ${a.title}${a.dueDate ? ` (Due: ${a.dueDate})` : ''}
-        </div>
-      `).join('')}
-    </div>
-    <div>
-      <div style="color: orange; margin-bottom: 5px;">Dates Found: ${dates.length}</div>
-      ${dates.map(d => `
-        <div style="margin-left: 10px; font-size: 11px;">
-          📅 ${d.type}: ${d.text}
-        </div>
-      `).join('')}
+      <div style="color: #0066cc; margin-bottom: 5px;">
+        Found ${assignments.length} unique assignments
+      </div>
+      ${assignments.map(a => {
+        const priority = calculateAssignmentPriority(a);
+        const priorityColor = priority > 0.7 ? '#ff6b6b' : 
+                            priority > 0.4 ? '#ffd700' : '#90EE90';
+        return `
+          <div style="margin: 8px 0; padding: 8px; border-left: 2px solid ${priorityColor}; background: rgba(255,255,255,0.1);">
+            <div style="margin-bottom: 4px;">📚 ${a.title}</div>
+            <div style="color: #90EE90; margin-bottom: 4px;">
+              📝 ${a.points} ${a.pointsText}
+            </div>
+            <div style="color: #ADD8E6; font-size: 11px;">
+              ⏰ Due: ${a.dueDate}
+            </div>
+            ${a.courseName ? `
+              <div style="color: #DDA0DD; font-size: 11px;">
+                📚 Course: ${a.courseName}
+              </div>
+            ` : ''}
+            <div style="color: ${priorityColor}; font-size: 11px; margin-top: 4px;">
+              ⚡ Priority: ${Math.round(priority * 100)}%
+            </div>
+          </div>
+        `;
+      }).join('')}
     </div>
   `;
 }
@@ -540,19 +506,54 @@ class AssignmentPrioritizer {
           `[data-quiz-id="${item.plannable_id}"]`
         );
 
+        // Get points from multiple sources
+        let points = null;
+        
+        // 1. Try to get points from the API response
+        if (item.plannable?.points_possible) {
+          points = item.plannable.points_possible;
+        }
+        
+        // 2. Try to get points from the DOM element
+        if (element) {
+          // Look for the points span with specific class
+          const pointsSpan = element.querySelector('span.css-mum2ig-text');
+          if (pointsSpan) {
+            const pointsValue = parseInt(pointsSpan.textContent);
+            if (!isNaN(pointsValue)) {
+              points = pointsValue;
+            }
+          }
+          
+          // If still no points, try screen reader text
+          if (points === null) {
+            const srText = element.querySelector('.css-1sr5vj2-screenReaderContent')?.textContent;
+            if (srText) {
+              const pointsMatch = srText.match(/(\d+)\s*points?/i);
+              if (pointsMatch) {
+                points = parseInt(pointsMatch[1]);
+              }
+            }
+          }
+        }
+
+        // Add debug highlighting
         if (element) {
           element.classList.add('debug-highlight', debugClass);
           element.setAttribute('data-debug-type', type.toUpperCase());
-        }
-
-        // Extract points from the HTML element if available
-        let points = item.plannable?.points_possible;
-        if (element) {
-          const pointsText = element.textContent.match(/(\d+)\s*(?:points?|pts)/i);
-          if (pointsText) {
-            points = parseInt(pointsText[1]);
+          if (points !== null) {
+            element.setAttribute('data-points', points);
           }
         }
+
+        // Log what we found
+        console.log('Assignment processed:', {
+          title: item.plannable?.title || item.plannable?.name,
+          type: type,
+          points: points,
+          elementFound: !!element,
+          apiPoints: item.plannable?.points_possible
+        });
 
         return {
           title: item.plannable?.title || item.plannable?.name,

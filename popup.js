@@ -47,4 +47,39 @@ function formatDate(dateString) {
     day: 'numeric',
     year: 'numeric'
   });
+}
+
+// Listen for assignment updates from content script
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'ASSIGNMENTS_UPDATE') {
+    displayAssignments(message.data);
+  }
+});
+
+function displayAssignments(assignments) {
+  const container = document.getElementById('assignments-container');
+  if (!container) return;
+
+  assignments.sort((a, b) => b.priority - a.priority);
+
+  container.innerHTML = `
+    <h2>Assignment Priorities</h2>
+    ${assignments.map(a => `
+      <div class="assignment-card priority-${getPriorityLevel(a.priority)}">
+        <h3>${a.title}</h3>
+        <div class="assignment-details">
+          <div class="points">Points: ${a.points}${a.pointsText}</div>
+          <div class="due-date">Due: ${a.dueDate}</div>
+          <div class="course">${a.courseName}</div>
+          <div class="priority">Priority: ${Math.round(a.priority * 100)}%</div>
+        </div>
+      </div>
+    `).join('')}
+  `;
+}
+
+function getPriorityLevel(priority) {
+  if (priority > 0.7) return 'high';
+  if (priority > 0.4) return 'medium';
+  return 'low';
 } 
