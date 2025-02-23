@@ -895,6 +895,53 @@ function getStoredAssignments(callback) {
   });
 }
 
+// Add visibility toggle functions
+function createVisibilityToggle() {
+  const toggleContainer = document.createElement('div');
+  toggleContainer.style.position = 'fixed';
+  toggleContainer.style.top = '20px';
+  toggleContainer.style.right = '70px';
+  toggleContainer.style.zIndex = '9999999';
+  toggleContainer.innerHTML = `
+    <label class="visibility-toggle" style="
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(255, 255, 255, 0.9);
+      padding: 6px 12px;
+      border-radius: 20px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      cursor: pointer;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 12px;
+    ">
+      <input type="checkbox" id="extension-visibility" style="
+        margin: 0;
+        cursor: pointer;
+      ">
+      <span>Follow Outside Canvas</span>
+    </label>
+  `;
+  document.body.appendChild(toggleContainer);
+
+  // Initialize toggle state from storage
+  chrome.storage.local.get('followOutsideCanvas', (data) => {
+    const shouldFollow = data.followOutsideCanvas !== false; // Default to true
+    document.getElementById('extension-visibility').checked = shouldFollow;
+  });
+
+  // Add toggle event listener
+  document.getElementById('extension-visibility').addEventListener('change', (e) => {
+    const shouldFollow = e.target.checked;
+    chrome.storage.local.set({ followOutsideCanvas: shouldFollow });
+  });
+
+  // Only show toggle on Canvas pages
+  if (!window.location.href.includes('instructure.com')) {
+    toggleContainer.style.display = 'none';
+  }
+}
+
 // Update the initialization code
 (function() {
   console.log('Initializing Canvas Assignment Extension...');
@@ -908,6 +955,17 @@ function getStoredAssignments(callback) {
   button.style.top = '20px';
   button.style.zIndex = '9999999';
   document.body.appendChild(button);
+
+  // Create visibility toggle
+  createVisibilityToggle();
+
+  // Check if we should show the button on non-Canvas pages
+  if (!window.location.href.includes('instructure.com')) {
+    chrome.storage.local.get('followOutsideCanvas', (data) => {
+      const shouldFollow = data.followOutsideCanvas !== false;
+      button.style.display = shouldFollow ? 'block' : 'none';
+    });
+  }
 
   // Create and inject the popup
   popup = document.createElement('div');
