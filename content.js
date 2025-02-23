@@ -896,37 +896,55 @@ function getStoredAssignments(callback) {
 }
 
 // Add visibility toggle functions
-function createVisibilityToggle() {
+function createVisibilityToggle(button) {
   const toggleContainer = document.createElement('div');
-  toggleContainer.style.position = 'fixed';
-  toggleContainer.style.top = '20px';
-  toggleContainer.style.right = '70px';
-  toggleContainer.style.zIndex = '9999999';
+  toggleContainer.style.cssText = `
+    position: fixed;
+    z-index: 9999999;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 6px 12px;
+    border-radius: 20px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 12px;
+    transition: all 0.3s ease;
+  `;
+
   toggleContainer.innerHTML = `
-    <label class="visibility-toggle" style="
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      background: rgba(255, 255, 255, 0.9);
-      padding: 6px 12px;
-      border-radius: 20px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-      cursor: pointer;
-      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-      font-size: 12px;
-    ">
-      <input type="checkbox" id="extension-visibility" style="
-        margin: 0;
-        cursor: pointer;
-      ">
+    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+      <input type="checkbox" id="extension-visibility" style="margin: 0; cursor: pointer;">
       <span>Follow Outside Canvas</span>
     </label>
   `;
+
   document.body.appendChild(toggleContainer);
+
+  // Function to update toggle position relative to button
+  function updateTogglePosition() {
+    const buttonRect = button.getBoundingClientRect();
+    toggleContainer.style.left = `${buttonRect.left - toggleContainer.offsetWidth - 10}px`;
+    toggleContainer.style.top = `${buttonRect.top + (buttonRect.height - toggleContainer.offsetHeight) / 2}px`;
+  }
+
+  // Update toggle position initially and when button moves
+  updateTogglePosition();
+  
+  // Watch for button position changes
+  const observer = new MutationObserver(() => {
+    updateTogglePosition();
+  });
+  
+  observer.observe(button, {
+    attributes: true,
+    attributeFilter: ['style']
+  });
 
   // Initialize toggle state from storage
   chrome.storage.local.get('followOutsideCanvas', (data) => {
-    const shouldFollow = data.followOutsideCanvas !== false; // Default to true
+    const shouldFollow = data.followOutsideCanvas !== false;
     document.getElementById('extension-visibility').checked = shouldFollow;
   });
 
@@ -940,24 +958,105 @@ function createVisibilityToggle() {
   if (!window.location.href.includes('instructure.com')) {
     toggleContainer.style.display = 'none';
   }
+
+  return toggleContainer;
+}
+
+// Function to make the button draggable
+function makeButtonDraggable(button) {
+  let isDragging = false;
+  let currentX;
+  let currentY;
+  let initialX;
+  let initialY;
+
+  button.addEventListener('mousedown', startDragging);
+  document.addEventListener('mousemove', drag);
+  document.addEventListener('mouseup', stopDragging);
+
+  function startDragging(e) {
+    if (e.target === button) {
+      isDragging = true;
+      button.style.cursor = 'grabbing';
+      button.style.transition = 'none'; // Remove transition during drag
+      
+      const rect = button.getBoundingClientRect();
+      initialX = e.clientX - rect.left;
+      initialY = e.clientY - rect.top;
+    }
+  }
+
+  function drag(e) {
+    if (!isDragging) return;
+
+    e.preventDefault();
+    
+    // Calculate new position
+    currentX = e.clientX - initialX;
+    currentY = e.clientY - initialY;
+
+    // Keep button within window bounds with smooth edge detection
+    const maxX = window.innerWidth - button.offsetWidth;
+    const maxY = window.innerHeight - button.offsetHeight;
+    
+    currentX = Math.min(Math.max(0, currentX), maxX);
+    currentY = Math.min(Math.max(0, currentY), maxY);
+
+    // Use transform for smoother movement
+    button.style.transform = `translate3d(${currentX}px, ${currentY}px, 0)`;
+    button.style.left = '0';
+    button.style.top = '0';
+  }
+
+  function stopDragging() {
+    if (!isDragging) return;
+    
+    isDragging = false;
+    button.style.cursor = 'grab';
+    
+    // Update the actual position and reset transform
+    button.style.transition = 'transform 0.2s ease-out';
+    button.style.left = `${currentX}px`;
+    button.style.top = `${currentY}px`;
+    button.style.transform = 'none';
+  }
 }
 
 // Update the initialization code
 (function() {
   console.log('Initializing Canvas Assignment Extension...');
 
-  // Create and inject the button immediately
+  // Create and inject the button with updated styles
   const button = document.createElement('button');
   button.className = 'assignments-button';
   button.textContent = '0';
-  button.style.position = 'fixed';
-  button.style.right = '20px';
-  button.style.top = '20px';
-  button.style.zIndex = '9999999';
+  button.style.cssText = `
+    position: fixed;
+    right: 20px;
+    top: 20px;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: rgba(0, 122, 255, 0.95);
+    color: white;
+    border: none;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: grab;
+    z-index: 2147483647;
+    box-shadow: 0 4px 12px rgba(0, 122, 255, 0.3);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  `;
   document.body.appendChild(button);
 
-  // Create visibility toggle
-  createVisibilityToggle();
+  // Make the button draggable
+  makeButtonDraggable(button);
+
+  // Create visibility toggle with button reference
+  const toggle = createVisibilityToggle(button);
 
   // Check if we should show the button on non-Canvas pages
   if (!window.location.href.includes('instructure.com')) {
@@ -971,17 +1070,66 @@ function createVisibilityToggle() {
   popup = document.createElement('div');
   popup.className = 'assignments-popup';
   popup.innerHTML = `
-    <div class="popup-header">
+    <div class="popup-header" style="
+      user-select: none;
+      background: #f8f9fa;
+      padding: 12px;
+      border-bottom: 1px solid #eee;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    ">
       <div class="header-title">
         <div class="popup-title">Assignments</div>
         <div class="task-count">0 Tasks</div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <a href="https://www.google.com" target="_blank" style="text-decoration: none;">
+          <button id="desktop-button" style="
+            padding: 6px 12px;
+            background: #007AFF;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+          ">
+            <span>Desktop Application</span>
+          </button>
+        </a>
+        <img 
+          src="${chrome.runtime.getURL('iconcanvas.jpg')}" 
+          style="
+            width: 48px;
+            height: 48px;
+            object-fit: contain;
+          "
+        >
       </div>
     </div>
     <div class="popup-content">
       <div class="assignments-list"></div>
     </div>
   `;
+
   document.body.appendChild(popup);
+
+  // Make popup draggable
+  makeDraggable(popup);
+
+  // Update the button click handler
+  button.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isVisible = popup.style.display === 'block';
+    popup.style.display = isVisible ? 'none' : 'block';
+    if (!isVisible) {
+      updatePopupContent();
+    }
+  });
 
   // Function to update assignment count
   const updateAssignmentCount = () => {
@@ -1094,24 +1242,34 @@ function createVisibilityToggle() {
     });
   }
 
-  // Add click handler for the button
-  button.addEventListener('click', (e) => {
-    e.stopPropagation();
-    popup.classList.toggle('show');
-    if (popup.classList.contains('show')) {
-      updatePopupContent();
-    }
-  });
-
   // Close popup when clicking outside
   document.addEventListener('click', (e) => {
     if (!popup.contains(e.target) && !button.contains(e.target)) {
-      popup.classList.remove('show');
+      popup.style.display = 'none';
     }
   });
 
   // Check periodically
   setInterval(updateAssignmentCount, 2000);
+
+  // Add click handler for the URL button
+  const addUrlButton = popup.querySelector('#add-url-button');
+  addUrlButton.addEventListener('click', () => {
+    const url = prompt('Enter Canvas URL:');
+    if (url && url.includes('instructure.com')) {
+      chrome.storage.local.get('canvasUrls', (data) => {
+        const urls = data.canvasUrls || [];
+        if (!urls.includes(url)) {
+          urls.push(url);
+          chrome.storage.local.set({ canvasUrls: urls }, () => {
+            console.log('URL added:', url);
+          });
+        }
+      });
+    } else if (url) {
+      alert('Please enter a valid Canvas URL (must include instructure.com)');
+    }
+  });
 
   console.log('Canvas Assignment Extension initialized!');
 })();
@@ -1298,5 +1456,60 @@ function toggleAssignmentComplete(assignmentId) {
       console.log('Updated completed assignments:', completedAssignments);
       updatePopupContent();
     });
+  });
+}
+
+// Function to store popup position
+function storePopupPosition(x, y) {
+  chrome.storage.local.set({ 'popupPosition': { x, y } });
+}
+
+// Function to get stored popup position
+function getStoredPopupPosition(callback) {
+  chrome.storage.local.get('popupPosition', (data) => {
+    callback(data.popupPosition || { x: 20, y: 20 });
+  });
+}
+
+// Update makeDraggable function
+function makeDraggable(popup) {
+  const header = popup.querySelector('.popup-header');
+  let isDragging = false;
+  let startX, startY;
+  let initialX, initialY;
+
+  header.addEventListener('mousedown', function(e) {
+    isDragging = true;
+    header.style.cursor = 'grabbing';
+    
+    // Get initial positions
+    startX = e.clientX;
+    startY = e.clientY;
+    initialX = popup.offsetLeft;
+    initialY = popup.offsetTop;
+  });
+
+  document.addEventListener('mousemove', function(e) {
+    if (!isDragging) return;
+
+    e.preventDefault();
+
+    // Calculate new position
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    const newX = initialX + dx;
+    const newY = initialY + dy;
+
+    // Keep within window bounds
+    const maxX = window.innerWidth - popup.offsetWidth;
+    const maxY = window.innerHeight - popup.offsetHeight;
+    
+    popup.style.left = `${Math.min(Math.max(0, newX), maxX)}px`;
+    popup.style.top = `${Math.min(Math.max(0, newY), maxY)}px`;
+  });
+
+  document.addEventListener('mouseup', function() {
+    isDragging = false;
+    header.style.cursor = 'grab';
   });
 }

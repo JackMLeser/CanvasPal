@@ -22,13 +22,13 @@
     }
   ],
   "icons": {
-    
+    "48": "iconcanvas.jpg"
   },
   "background": {
     "service_worker": "background.js"
   },
   "web_accessible_resources": [{
-    "resources": ["settings.html", "settings.js"],
+    "resources": ["settings.html", "settings.js", "iconcanvas.jpg"],
     "matches": ["*://*/*"]
   }]
 } 
